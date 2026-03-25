@@ -60,7 +60,7 @@ def main():
     print()
     print(f"  Broker model:      {BROKER_NAME}")
     print(f"  Commission:        ${COMMISSION_PER_TRADE:.2f} per trade")
-    print(f"  SEC fee:           ${SEC_FEE_RATE * 1_000_000:.2f} per $1M sold")
+    print(f"  SEC fee (2026):    ${SEC_FEE_RATE * 1_000_000:.2f} per $1M sold")
     print(f"  FINRA TAF:         ${FINRA_TAF_RATE:.6f} per share sold")
     print(f"  FINRA CAT:         ${FINRA_CAT_FEE:.6f} per transaction")
     print()

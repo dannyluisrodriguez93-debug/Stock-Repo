@@ -22,21 +22,28 @@ OPTIONS_PER_CONTRACT_ACTIVE: float = 0.50  # 30+ trades/quarter discount
 # ---------------------------------------------------------------------------
 # Regulatory fees (pass-through, charged on SELLS only)
 # These are charged by every broker — not broker-specific
+# Rates updated to 2026 schedule
 # ---------------------------------------------------------------------------
-# SEC Section 31 Transaction Fee: $27.80 per million of sell proceeds
-# Rate: 0.00278% = $0.0000278 per $1 of sell proceeds
-SEC_FEE_RATE: float = 0.0000278
+# SEC Section 31 Transaction Fee: $20.60 per million of sell proceeds
+# (effective April 4, 2026 — was $0.00 from mid-2025 to Apr 3, 2026)
+# Rate: 0.00206% = $0.0000206 per $1 of sell proceeds
+SEC_FEE_RATE: float = 0.0000206
 
-# FINRA Trading Activity Fee (TAF): $0.000166 per share sold, max $8.30
-FINRA_TAF_RATE: float = 0.000166
-FINRA_TAF_CAP: float = 8.30
+# FINRA Trading Activity Fee (TAF): $0.000195 per share sold, max $9.79
+# (increased from $0.000166 / $8.30 cap effective Jan 1, 2026)
+FINRA_TAF_RATE: float = 0.000195
+FINRA_TAF_CAP: float = 9.79
 
-# FINRA Consolidated Audit Trail (CAT) fee: negligible for retail
-# ~$0.000048 per covered sell transaction — included for completeness
-FINRA_CAT_FEE: float = 0.000048
+# FINRA Consolidated Audit Trail (CAT) fee
+# $0.000009 per executed equivalent share (both buys and sells)
+FINRA_CAT_FEE: float = 0.000009
 
-# Options Regulatory Fee (ORF): $0.02905 per contract (sells)
-OPTIONS_ORF: float = 0.02905
+# Options Regulatory Fee (ORF): ~$0.01 per contract aggregate (sells)
+# Sum of exchange-level ORFs (Cboe $0.0023, NYSE $0.0026, MIAX $0.0014, etc.)
+OPTIONS_ORF: float = 0.01
+
+# FINRA TAF on options (sells): $0.00329 per contract (2026 rate)
+OPTIONS_TAF: float = 0.00329
 
 # ---------------------------------------------------------------------------
 # Capital & position sizing
@@ -84,8 +91,14 @@ MARKET_OPEN_MINUTE: int = 30
 MARKET_CLOSE_HOUR: int = 16
 MARKET_CLOSE_MINUTE: int = 0
 
-# Extended hours (E*Trade allows pre-market 7:00-9:30, after-hours 16:00-20:00)
+# Extended hours (E*Trade sessions — limit orders only, no market orders)
+# Overnight:    4:00 AM - 7:00 AM ET (no $25 surcharge)
+# Pre-market:   7:00 AM - 9:30 AM ET
+# Regular:      9:30 AM - 4:00 PM ET
+# After-hours:  4:00 PM - 8:00 PM ET
 EXTENDED_HOURS_ENABLED: bool = False    # disabled by default (wider spreads)
+OVERNIGHT_OPEN_HOUR: int = 4
+OVERNIGHT_OPEN_MINUTE: int = 0
 PRE_MARKET_OPEN_HOUR: int = 7
 PRE_MARKET_OPEN_MINUTE: int = 0
 AFTER_HOURS_CLOSE_HOUR: int = 20

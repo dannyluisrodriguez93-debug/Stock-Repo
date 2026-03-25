@@ -181,13 +181,13 @@ class SimulatedAccount:
         commission = COMMISSION_PER_TRADE  # $0 for E*Trade equity trades
         sec_fee = 0.0
         finra_taf = 0.0
-        finra_cat = 0.0
+        # CAT fee applies to both buys and sells ($0.000009 per share)
+        finra_cat = round(qty * FINRA_CAT_FEE, 6)
 
         if is_sell:
             proceeds = price * qty
             sec_fee = round(proceeds * SEC_FEE_RATE, 6)
             finra_taf = round(min(qty * FINRA_TAF_RATE, FINRA_TAF_CAP), 6)
-            finra_cat = round(FINRA_CAT_FEE, 6)
 
         total = round(commission + sec_fee + finra_taf + finra_cat, 4)
         return {
