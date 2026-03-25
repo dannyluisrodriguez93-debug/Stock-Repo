@@ -65,8 +65,11 @@ POSITION_POLL_INTERVAL_SEC: float = 30.0  # price check on open positions every 
 # Minimum hold time — prevents unrealistic instant exits
 # ---------------------------------------------------------------------------
 MIN_HOLD_SEC: float = 300.0              # 5 minutes minimum in real-sim mode
-DEMO_MIN_HOLD_STEPS: int = 8             # 8 cycles (~24-40 simulated minutes)
-DEMO_SIM_MINUTES_PER_STEP: tuple[int, int] = (3, 6)  # each step = 3-6 sim minutes
+DEMO_MIN_HOLD_STEPS: int = 12            # 12 cycles (~48-90 simulated minutes)
+DEMO_SIM_MINUTES_PER_STEP: tuple[int, int] = (4, 8)  # each step = 4-8 sim minutes
+DEMO_CYCLE_SLEEP: tuple[float, float] = (4.0, 8.0)   # real seconds between cycles
+DEMO_MAX_POSITIONS: int = 3               # max open positions (realistic for $1K)
+DEMO_PRICE_DRIFT: tuple[float, float] = (-0.010, 0.010)  # symmetric, no bias
 
 # ---------------------------------------------------------------------------
 # Logging

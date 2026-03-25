@@ -693,6 +693,9 @@ def _run_demo_data_pump(st: DashboardState) -> None:
     from demo.config import (
         DEMO_MIN_HOLD_STEPS,
         DEMO_SIM_MINUTES_PER_STEP,
+        DEMO_CYCLE_SLEEP,
+        DEMO_MAX_POSITIONS,
+        DEMO_PRICE_DRIFT,
         SEC_FEE_RATE,
         FINRA_TAF_RATE,
         FINRA_TAF_CAP,
@@ -752,12 +755,13 @@ def _run_demo_data_pump(st: DashboardState) -> None:
     st.add_log(f"Min hold: {DEMO_MIN_HOLD_STEPS} cycles | Position limit: {MAX_POSITION_PCT*100:.0f}% of equity", "INFO")
     st.add_log(f"Exit strategies: Take-profit | Trailing stop (1.5%) | Hard stop-loss | Time decay | Volume divergence", "INFO")
     st.add_log("Unlimited day trades enabled (demo mode)", "INFO")
+    st.add_log("NOTE: This is a SIMULATION with synthetic data — not live market data", "WARN")
 
     while True:
         step += 1
-        time.sleep(random.uniform(2.0, 4.0))
+        time.sleep(random.uniform(DEMO_CYCLE_SLEEP[0], DEMO_CYCLE_SLEEP[1]))
 
-        # Advance simulated clock by 3-6 minutes per step
+        # Advance simulated clock by 4-8 minutes per step
         sim_advance = random.randint(DEMO_SIM_MINUTES_PER_STEP[0], DEMO_SIM_MINUTES_PER_STEP[1])
         sim_time += timedelta(minutes=sim_advance)
 
@@ -870,7 +874,7 @@ def _run_demo_data_pump(st: DashboardState) -> None:
 
         already_holding = any(p["ticker"] == ticker for p in positions)
 
-        if should_enter and not already_holding and len(positions) < 5:
+        if should_enter and not already_holding and len(positions) < DEMO_MAX_POSITIONS:
             price = base_prices.get(ticker, 100.0) * random.uniform(0.97, 1.03)
             max_spend = min(cash, equity * MAX_POSITION_PCT)
             qty = max(1, int(max_spend / price)) if price > 0 else 0
@@ -950,8 +954,8 @@ def _run_demo_data_pump(st: DashboardState) -> None:
         # -- update existing positions & check exits --
         closed_indices = []
         for i, p in enumerate(positions):
-            # Price drift (smaller per-step for more realism)
-            drift = random.uniform(-0.008, 0.012)
+            # Price drift (symmetric — no directional bias)
+            drift = random.uniform(DEMO_PRICE_DRIFT[0], DEMO_PRICE_DRIFT[1])
             p["current_price"] = round(p["current_price"] * (1 + drift), 2)
 
             # Update high water mark
@@ -1135,6 +1139,11 @@ def _run_demo_data_pump(st: DashboardState) -> None:
             sum(t["entry_price"] * t["qty"] for t in trades[-3:]) * 0.1, 2
         ) if trades else 0.0
 
+        # Show simulated market time, not real wall-clock
+        sim_hour = sim_time.hour
+        sim_market_open = 9 * 60 + 30 <= sim_hour * 60 + sim_time.minute <= 16 * 60
+        close_mins = max(0, (16 * 60) - (sim_hour * 60 + sim_time.minute))
+
         st.update_account(
             current_equity=equity,
             total_pnl=total_pnl,
@@ -1142,9 +1151,9 @@ def _run_demo_data_pump(st: DashboardState) -> None:
             available_cash=round(cash, 2),
             unsettled_funds=unsettled,
             day_trades_remaining=999,  # unlimited in demo
-            market_open=True,
-            market_status="Open",
-            next_event=f"Closes in {max(0, 16 - sim_time.hour)}h {60 - sim_time.minute}m",
+            market_open=sim_market_open,
+            market_status="SIM" if sim_market_open else "SIM-CLOSED",
+            next_event=f"Sim {sim_ts()} | Closes in {close_mins // 60}h {close_mins % 60}m",
         )
 
 
