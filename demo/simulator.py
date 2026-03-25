@@ -26,6 +26,7 @@ from demo.config import (
     MARKET_OPEN_MINUTE,
     MARKET_TZ,
     MAX_POSITION_PCT,
+    MIN_HOLD_SEC,
     PDT_MAX_DAY_TRADES,
     PDT_ROLLING_WINDOW_DAYS,
     PDT_THRESHOLD,
@@ -424,9 +425,22 @@ class DemoExecutor:
         result = self.account.buy(ticker, price, qty)
 
         self.state.add_log(
-            f"BUY {qty} {ticker} @ ${result['fill_price']:.2f} "
-            f"(slip: ${result['slippage']:.4f}, fees: ${result['fees']:.4f})",
+            f"ENTRY {qty} {ticker} @ ${result['fill_price']:.2f} "
+            f"(slip: ${result['slippage']:.4f}, fees: ${result['fees']:.4f}, "
+            f"cost: ${result['total_cost']:.2f})",
             "TRADE",
+        )
+        self.state.add_log(
+            f"  Signal: {signal['direction']} {signal['flag_level']} | "
+            f"RSI={signal.get('rsi', 'N/A')} vol={signal.get('volume_ratio', 'N/A')}x "
+            f"mag={signal.get('magnitude', 'N/A')} conf={signal.get('confidence', 'N/A')}",
+            "INFO",
+        )
+        self.state.add_log(
+            f"  Sizing: ${result['total_cost']:.2f} / ${self.account.equity:.2f} = "
+            f"{result['total_cost']/self.account.equity*100:.1f}% of equity | "
+            f"Cash remaining: ${self.account.available_cash:.2f}",
+            "INFO",
         )
 
         # Start monitoring position
@@ -466,13 +480,20 @@ class DemoExecutor:
         prev_volumes = []
 
         self.state.add_log(
-            f"Monitoring {ticker}: target ${target:.2f}, stop ${stop_loss:.2f}, "
-            f"max hold {max_hold_sec // 3600}h",
+            f"Monitoring {ticker}: target=${target:.2f} stop=${stop_loss:.2f} "
+            f"trailing=1.5% max_hold={max_hold_sec // 3600}h min_hold={MIN_HOLD_SEC:.0f}s",
+            "INFO",
+        )
+        self.state.add_log(
+            f"  Entry: ${entry_price:.2f} | RSI={signal.get('rsi', 'N/A')} "
+            f"vol_ratio={signal.get('volume_ratio', 'N/A')}x | catalyst={catalyst}",
             "INFO",
         )
 
+        check_count = 0
         while ticker in self.account.positions:
             await asyncio.sleep(POSITION_POLL_INTERVAL_SEC)
+            check_count += 1
 
             try:
                 stock = yf.Ticker(ticker)
@@ -487,7 +508,25 @@ class DemoExecutor:
                 self.account.positions[ticker]["current_price"] = current_price
 
                 elapsed = time.time() - entry_time
+                pnl_unrealized = (current_price - entry_price) * pos["qty"]
+                pnl_pct = (pnl_unrealized / (entry_price * pos["qty"])) * 100
+
+                # Log position check every 5th check
+                if check_count % 5 == 0:
+                    self.state.add_log(
+                        f"  {ticker} check #{check_count}: ${current_price:.2f} "
+                        f"P&L=${pnl_unrealized:.2f} ({pnl_pct:+.1f}%) "
+                        f"HWM=${high_water:.2f} elapsed={int(elapsed)}s",
+                        "INFO",
+                    )
+
+                # ---- Enforce minimum hold time ----
+                if elapsed < MIN_HOLD_SEC:
+                    self._update_dashboard_positions()
+                    continue
+
                 exit_trigger = None
+                exit_detail = ""
 
                 # Update high water mark
                 if current_price > high_water:
@@ -496,21 +535,29 @@ class DemoExecutor:
                 # 1. Take-profit
                 if signal["direction"] == "bullish" and current_price >= target:
                     exit_trigger = "take_profit"
+                    exit_detail = f"Price ${current_price:.2f} >= target ${target:.2f}"
                 elif signal["direction"] == "bearish" and current_price <= target:
                     exit_trigger = "take_profit"
+                    exit_detail = f"Price ${current_price:.2f} <= target ${target:.2f}"
 
                 # 2. Trailing stop
                 trailing_stop = high_water * (1 - trailing_stop_pct)
                 if signal["direction"] == "bullish" and current_price <= trailing_stop:
                     exit_trigger = "trailing_stop"
+                    exit_detail = (
+                        f"Price ${current_price:.2f} <= trailing ${trailing_stop:.2f} "
+                        f"(HWM ${high_water:.2f})"
+                    )
 
                 # 3. Hard stop loss
                 if signal["direction"] == "bullish" and current_price <= stop_loss:
                     exit_trigger = "stop_loss"
+                    exit_detail = f"Price ${current_price:.2f} <= stop ${stop_loss:.2f}"
 
                 # 4. Time decay
                 if elapsed >= max_hold_sec:
                     exit_trigger = "time_decay"
+                    exit_detail = f"Held {int(elapsed)}s >= max {max_hold_sec}s ({catalyst})"
 
                 # 5. Volume divergence
                 prev_volumes.append(current_vol)
@@ -522,11 +569,16 @@ class DemoExecutor:
                     )
                     if recent_prices_rising and recent_vol_declining:
                         exit_trigger = "volume_divergence"
+                        exit_detail = "Price rising but volume declining 3 consecutive checks"
 
                 # Update dashboard position
                 self._update_dashboard_positions()
 
                 if exit_trigger:
+                    self.state.add_log(
+                        f"Exit trigger fired for {ticker}: {exit_trigger} | {exit_detail}",
+                        "WARN",
+                    )
                     await self._execute_exit(ticker, current_price, exit_trigger, signal)
                     return
 
@@ -548,11 +600,29 @@ class DemoExecutor:
 
         color = "PROFIT" if result["pnl_net"] >= 0 else "LOSS"
         self.state.add_log(
-            f"SELL {result['qty']} {ticker} @ ${result['exit_price']:.2f} | "
-            f"P&L: ${result['pnl_net']:.2f} ({result['pnl_pct']:.1f}%) | "
+            f"EXIT {result['qty']} {ticker} @ ${result['exit_price']:.2f} | "
+            f"P&L: gross=${result['pnl_gross']:.2f} fees=${result['fees']:.4f} "
+            f"net=${result['pnl_net']:.2f} ({result['pnl_pct']:.1f}%) | "
             f"Trigger: {trigger}",
             color,
         )
+        hold_mins = result["hold_duration_sec"] / 60
+        self.state.add_log(
+            f"  Hold: {hold_mins:.1f}min | Entry=${result['entry_price']:.2f} "
+            f"Exit=${result['exit_price']:.2f} | Slippage=${result.get('exit_slippage', 0):.4f}",
+            "INFO",
+        )
+
+        # Log to file for optimization analysis
+        self.state.log_trade_to_file({
+            **result,
+            "catalyst_type": signal.get("catalyst_type", ""),
+            "rsi_at_entry": signal.get("rsi", None),
+            "volume_ratio_at_entry": signal.get("volume_ratio", None),
+            "support": signal.get("support", None),
+            "resistance": signal.get("resistance", None),
+            "equity_at_exit": round(self.account.equity, 2),
+        })
 
         # Update dashboard
         self.state.add_trade(result)
@@ -659,18 +729,27 @@ class DemoOrchestrator:
 
                     if signal["flag_level"] == "RED":
                         self.state.add_log(
-                            f"RED FLAG: {signal['ticker']} - {signal['headline'][:80]}",
+                            f"RED FLAG: {signal['ticker']} {signal['direction']} - "
+                            f"{signal['headline'][:80]}",
                             "RED",
                         )
+                        self.state.add_log(
+                            f"  RSI={signal['rsi']} vol={signal['volume_ratio']}x "
+                            f"mag={signal['magnitude']} conf={signal['confidence']} "
+                            f"price=${signal['price']:.2f} support=${signal['support']:.2f} "
+                            f"resist=${signal['resistance']:.2f}",
+                            "INFO",
+                        )
 
-                        # In demo mode, auto-approve RED signals
-                        self.state.add_log(f"Auto-approving {signal['ticker']} (demo mode)", "INFO")
+                        # Auto-approve RED signals
+                        self.state.add_log(f"Auto-executing {signal['ticker']} (RED flag)", "INFO")
                         await self.executor.execute_entry(signal)
 
                     elif signal["flag_level"] == "YELLOW":
                         self.state.add_log(
-                            f"YELLOW FLAG: {signal['ticker']} - watching (mag={signal['magnitude']}, "
-                            f"conf={signal['confidence']})",
+                            f"YELLOW FLAG: {signal['ticker']} {signal['direction']} - "
+                            f"watching (mag={signal['magnitude']}, conf={signal['confidence']}, "
+                            f"RSI={signal['rsi']}, vol={signal['volume_ratio']}x)",
                             "YELLOW",
                         )
 

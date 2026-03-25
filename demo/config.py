@@ -62,6 +62,19 @@ VOLUME_CHECK_INTERVAL_SEC: float = 10.0   # volume confirmation every 10 s
 POSITION_POLL_INTERVAL_SEC: float = 30.0  # price check on open positions every 30 s
 
 # ---------------------------------------------------------------------------
+# Minimum hold time — prevents unrealistic instant exits
+# ---------------------------------------------------------------------------
+MIN_HOLD_SEC: float = 300.0              # 5 minutes minimum in real-sim mode
+DEMO_MIN_HOLD_STEPS: int = 8             # 8 cycles (~24-40 simulated minutes)
+DEMO_SIM_MINUTES_PER_STEP: tuple[int, int] = (3, 6)  # each step = 3-6 sim minutes
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+LOG_RETENTION: int = 500                 # keep last 500 log entries (up from 200)
+TRADE_LOG_FILE: str = "demo_trade_log.jsonl"  # append-only JSONL for optimization
+
+# ---------------------------------------------------------------------------
 # Technical thresholds used by SignalSimulator
 # ---------------------------------------------------------------------------
 RSI_OVERSOLD: float = 30.0

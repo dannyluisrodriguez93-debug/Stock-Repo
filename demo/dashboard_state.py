@@ -8,10 +8,14 @@ stream never sees a half-written snapshot.
 
 from __future__ import annotations
 
+import json
+import os
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
+
+from demo.config import LOG_RETENTION, TRADE_LOG_FILE
 
 
 @dataclass
@@ -98,6 +102,15 @@ class DashboardState:
                 "message": message,
             }
             self.system_log.insert(0, entry)
-            if len(self.system_log) > 200:
-                self.system_log = self.system_log[:200]
+            if len(self.system_log) > LOG_RETENTION:
+                self.system_log = self.system_log[:LOG_RETENTION]
             self._version += 1
+
+    def log_trade_to_file(self, trade_data: dict) -> None:
+        """Append detailed trade record to JSONL file for future optimization."""
+        trade_data["_logged_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with open(TRADE_LOG_FILE, "a") as f:
+                f.write(json.dumps(trade_data, default=str) + "\n")
+        except Exception:
+            pass  # never crash on logging

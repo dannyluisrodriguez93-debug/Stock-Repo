@@ -437,9 +437,14 @@ function renderAccount(a){
 
   $('a_cash').textContent = money(a.available_cash);
   $('a_unsettled').textContent = money(a.unsettled_funds);
-  $('a_daytrades').textContent = a.day_trades_remaining + ' / 3';
-  $('a_daytrades').style.color = a.day_trades_remaining<=1?'var(--red)':
-                                  a.day_trades_remaining<=2?'var(--amber)':'var(--green)';
+  if(a.day_trades_remaining >= 999){
+    $('a_daytrades').textContent = 'Unlimited';
+    $('a_daytrades').style.color = 'var(--cyan)';
+  } else {
+    $('a_daytrades').textContent = a.day_trades_remaining + ' / 3';
+    $('a_daytrades').style.color = a.day_trades_remaining<=1?'var(--red)':
+                                    a.day_trades_remaining<=2?'var(--amber)':'var(--green)';
+  }
 
   const mktEl = $('a_market');
   if(a.market_open){
@@ -678,85 +683,209 @@ def api_state() -> dict:
 # ---------------------------------------------------------------------------
 def _run_demo_data_pump(st: DashboardState) -> None:
     """Background thread that feeds synthetic data into *st* so the
-    dashboard has something to display when run standalone."""
-    import random
+    dashboard has something to display when run standalone.
 
-    tickers = ["NVDA", "TSLA", "AAPL", "AMD", "META", "SPY", "BA", "MSFT"]
-    catalysts = [
-        "Earnings beat", "FDA approval", "Analyst upgrade", "Volume spike",
-        "Insider buy", "Sector rotation", "Gap up", "Breakout",
-        "News catalyst", "RSI oversold bounce",
-    ]
+    v2 — realistic hold times, price-driven exits, simulated clock,
+    and comprehensive logging for optimization analysis.
+    """
+    import random
+    from datetime import datetime, timedelta
+    from demo.config import (
+        DEMO_MIN_HOLD_STEPS,
+        DEMO_SIM_MINUTES_PER_STEP,
+        SEC_FEE_RATE,
+        FINRA_TAF_RATE,
+        FINRA_TAF_CAP,
+        SLIPPAGE_MIN_PCT,
+        SLIPPAGE_MAX_PCT,
+        MAX_POSITION_PCT,
+    )
+    from demo.demo_signals import CATALYST_TEMPLATES, TICKER_SECTOR
+
+    tickers = ["NVDA", "TSLA", "AAPL", "AMD", "META", "SPY", "BA", "MSFT",
+               "GOOGL", "AMZN", "LMT", "RTX", "GD", "NOC"]
     base_prices = {
         "NVDA": 135.0, "TSLA": 245.0, "AAPL": 192.0, "AMD": 165.0,
         "META": 510.0, "SPY": 525.0, "BA": 188.0, "MSFT": 420.0,
+        "GOOGL": 175.0, "AMZN": 195.0, "LMT": 460.0, "RTX": 120.0,
+        "GD": 295.0, "NOC": 470.0,
     }
+
+    # Simulated clock — starts at 9:30 AM and advances each step
+    sim_time = datetime.now().replace(hour=9, minute=30, second=0, microsecond=0)
 
     equity = 1000.0
     cash = 1000.0
+    starting_capital = 1000.0
     positions: list[dict] = []
     trades: list[dict] = []
     step = 0
+    total_trades = 0
+    winning_trades = 0
+    total_fees_paid = 0.0
 
-    st.add_equity_point(time.strftime("%H:%M:%S"), equity)
-    st.add_log("Demo data pump started", "INFO")
-    st.add_log("Scanning watchlist: " + ", ".join(tickers), "SCAN")
+    # Trailing stop tracking: ticker -> high water mark
+    high_water_marks: dict[str, float] = {}
+
+    def sim_ts() -> str:
+        return sim_time.strftime("%H:%M:%S")
+
+    def compute_fees(price: float, qty: int) -> float:
+        sec = price * qty * SEC_FEE_RATE
+        taf = min(qty * FINRA_TAF_RATE, FINRA_TAF_CAP)
+        return round(sec + taf, 4)
+
+    def apply_slippage(price: float, is_buy: bool) -> float:
+        slip = random.uniform(SLIPPAGE_MIN_PCT, SLIPPAGE_MAX_PCT)
+        return round(price * (1 + slip) if is_buy else price * (1 - slip), 2)
+
+    st.add_equity_point(sim_ts(), equity)
+    st.add_log("Demo simulation engine started", "INFO")
+    st.add_log(f"Starting capital: ${starting_capital:,.2f}", "INFO")
+    st.add_log(f"Watchlist: {', '.join(tickers)} ({len(tickers)} tickers)", "SCAN")
+    st.add_log(f"Min hold: {DEMO_MIN_HOLD_STEPS} cycles | Position limit: {MAX_POSITION_PCT*100:.0f}% of equity", "INFO")
+    st.add_log(f"Exit strategies: Take-profit | Trailing stop (1.5%) | Hard stop-loss | Time decay | Volume divergence", "INFO")
+    st.add_log("Unlimited day trades enabled (demo mode)", "INFO")
 
     while True:
         step += 1
         time.sleep(random.uniform(2.0, 4.0))
 
-        # -- emit a signal every cycle --
+        # Advance simulated clock by 3-6 minutes per step
+        sim_advance = random.randint(DEMO_SIM_MINUTES_PER_STEP[0], DEMO_SIM_MINUTES_PER_STEP[1])
+        sim_time += timedelta(minutes=sim_advance)
+
+        # Wrap around at market close, restart next "day"
+        if sim_time.hour >= 16:
+            sim_time = sim_time.replace(hour=9, minute=30, second=0)
+            st.add_log("--- Market close / new session ---", "INFO")
+
+        st.add_log(f"--- Scan cycle #{step} | {sim_ts()} ---", "INFO")
+
+        # -- emit a signal --
         ticker = random.choice(tickers)
+        sector = TICKER_SECTOR.get(ticker, "technical")
+        templates = CATALYST_TEMPLATES.get(sector, CATALYST_TEMPLATES["technical"])
+        headline = random.choice(templates).format(ticker=ticker)
         direction = random.choice(["Long", "Short"])
-        flag = random.choice(["Yellow", "Yellow", "Red"])
         mag = round(random.uniform(0.5, 5.0), 1)
         conf = round(random.uniform(0.4, 0.95), 2)
+        flag = "Red" if mag >= 3.0 and conf >= 0.6 else "Yellow"
+        rsi = round(random.uniform(25, 75), 1)
+        vol_ratio = round(random.uniform(0.8, 3.5), 2)
 
         st.add_signal({
             "ticker": ticker,
-            "catalyst": random.choice(catalysts),
+            "catalyst": headline,
+            "catalyst_type": sector,
             "direction": direction,
             "magnitude": str(mag) + "%",
             "confidence": str(int(conf * 100)) + "%",
             "flag_level": flag,
+            "timestamp": sim_ts(),
         })
         st.add_log(
-            f"Signal: {ticker} {direction} | {flag} flag | conf={int(conf*100)}%",
+            f"Signal: {ticker} {direction} | {flag.upper()} flag | mag={mag} conf={int(conf*100)}% "
+            f"| RSI={rsi} vol_ratio={vol_ratio}x | sector={sector}",
             "SCAN",
         )
+        st.add_log(f"  Catalyst: {headline[:100]}", "SCAN")
 
-        # -- maybe open a position (30 % chance) --
-        if random.random() < 0.30 and len(positions) < 4:
+        # -- maybe open a position (RED flags auto-execute, 30% of YELLOWs) --
+        should_enter = (flag == "Red") or (flag == "Yellow" and random.random() < 0.15)
+        already_holding = any(p["ticker"] == ticker for p in positions)
+
+        if should_enter and not already_holding and len(positions) < 5:
             price = base_prices.get(ticker, 100.0) * random.uniform(0.97, 1.03)
-            qty = max(1, int(50 / price))
-            cost = round(price * qty, 2)
-            if cost < cash:
+            max_spend = min(cash, equity * MAX_POSITION_PCT)
+            qty = max(1, int(max_spend / price)) if price > 0 else 0
+            fill_price = apply_slippage(price, is_buy=True)
+            cost = round(fill_price * qty, 2)
+
+            if cost < cash and qty > 0:
                 cash -= cost
+
+                # Set realistic stop/target based on direction and catalyst
+                if direction == "Long":
+                    stop_loss = round(fill_price * random.uniform(0.965, 0.98), 2)
+                    target = round(fill_price * random.uniform(1.03, 1.08), 2)
+                else:
+                    stop_loss = round(fill_price * random.uniform(1.02, 1.035), 2)
+                    target = round(fill_price * random.uniform(0.92, 0.97), 2)
+
+                # Time decay limit based on catalyst type
+                time_limits = {
+                    "geopolitical": 60, "earnings": 180, "contract_win": 240,
+                    "regulatory": 360, "supply_chain": 180, "macro": 120, "technical": 90,
+                }
+                max_hold_mins = time_limits.get(sector, 120)
+
                 pos = {
                     "ticker": ticker,
                     "direction": direction,
                     "qty": qty,
-                    "entry_price": round(price, 2),
-                    "current_price": round(price, 2),
+                    "entry_price": fill_price,
+                    "current_price": fill_price,
                     "unrealized_pnl": 0.0,
                     "unrealized_pnl_pct": 0.0,
-                    "stop_loss": round(price * 0.97, 2),
-                    "target": round(price * 1.05, 2),
+                    "stop_loss": stop_loss,
+                    "target": target,
                     "time_held": "0m",
-                    "_entry_time": time.strftime("%H:%M:%S"),
+                    "_entry_time": sim_ts(),
+                    "_entry_sim_time": sim_time,
                     "_step_opened": step,
+                    "_catalyst": headline,
+                    "_catalyst_type": sector,
+                    "_signal_confidence": conf,
+                    "_signal_magnitude": mag,
+                    "_rsi_at_entry": rsi,
+                    "_vol_ratio_at_entry": vol_ratio,
+                    "_max_hold_mins": max_hold_mins,
+                    "_trailing_pct": 0.015,
                 }
                 positions.append(pos)
+                high_water_marks[ticker] = fill_price
+
+                slippage = round(fill_price - price, 4)
                 st.add_log(
-                    f"OPEN {direction} {qty}x {ticker} @ ${price:.2f}",
+                    f"ENTRY {direction.upper()} {qty}x {ticker} @ ${fill_price:.2f} "
+                    f"(slippage: ${slippage:.4f}, cost: ${cost:.2f})",
                     "EXEC",
                 )
+                st.add_log(
+                    f"  Position sizing: ${cost:.2f} / ${equity:.2f} equity = "
+                    f"{cost/equity*100:.1f}% | Cash remaining: ${cash:.2f}",
+                    "INFO",
+                )
+                st.add_log(
+                    f"  Exit plan: stop=${stop_loss:.2f} target=${target:.2f} "
+                    f"trailing=1.5% max_hold={max_hold_mins}min ({sector})",
+                    "INFO",
+                )
+            elif qty <= 0:
+                st.add_log(f"Skip {ticker}: cannot afford at ${price:.2f} (cash=${cash:.2f})", "WARN")
+            else:
+                st.add_log(f"Skip {ticker}: cost ${cost:.2f} > cash ${cash:.2f}", "WARN")
+        elif already_holding:
+            st.add_log(f"Skip {ticker}: already holding position", "WARN")
 
-        # -- update existing positions --
-        for p in positions:
-            drift = random.uniform(-0.015, 0.02)
+        # -- update existing positions & check exits --
+        closed_indices = []
+        for i, p in enumerate(positions):
+            # Price drift (smaller per-step for more realism)
+            drift = random.uniform(-0.008, 0.012)
             p["current_price"] = round(p["current_price"] * (1 + drift), 2)
+
+            # Update high water mark
+            tk = p["ticker"]
+            if p["direction"] == "Long":
+                if p["current_price"] > high_water_marks.get(tk, p["entry_price"]):
+                    high_water_marks[tk] = p["current_price"]
+            else:
+                if p["current_price"] < high_water_marks.get(tk, p["entry_price"]):
+                    high_water_marks[tk] = p["current_price"]
+
+            # Compute P&L
             raw_pnl = (p["current_price"] - p["entry_price"]) * p["qty"]
             if p["direction"] == "Short":
                 raw_pnl = -raw_pnl
@@ -764,69 +893,180 @@ def _run_demo_data_pump(st: DashboardState) -> None:
             p["unrealized_pnl_pct"] = round(
                 raw_pnl / (p["entry_price"] * p["qty"]) * 100, 2
             )
-            mins = (step - p["_step_opened"]) * 3
-            p["time_held"] = f"{mins}m"
+
+            # Simulated hold time
+            hold_delta = sim_time - p["_entry_sim_time"]
+            hold_mins = int(hold_delta.total_seconds() / 60)
+            if hold_mins < 60:
+                p["time_held"] = f"{hold_mins}m"
+            else:
+                p["time_held"] = f"{hold_mins // 60}h {hold_mins % 60}m"
+
+            # -- CHECK EXIT TRIGGERS (only after minimum hold) --
+            steps_held = step - p["_step_opened"]
+            if steps_held < DEMO_MIN_HOLD_STEPS:
+                continue  # enforce minimum hold
+
+            exit_trigger = None
+            exit_detail = ""
+
+            # 1. Take-profit: price hit target
+            if p["direction"] == "Long" and p["current_price"] >= p["target"]:
+                exit_trigger = "Target hit"
+                exit_detail = f"Price ${p['current_price']:.2f} >= target ${p['target']:.2f}"
+            elif p["direction"] == "Short" and p["current_price"] <= p["target"]:
+                exit_trigger = "Target hit"
+                exit_detail = f"Price ${p['current_price']:.2f} <= target ${p['target']:.2f}"
+
+            # 2. Hard stop-loss
+            if not exit_trigger:
+                if p["direction"] == "Long" and p["current_price"] <= p["stop_loss"]:
+                    exit_trigger = "Stop loss"
+                    exit_detail = f"Price ${p['current_price']:.2f} <= stop ${p['stop_loss']:.2f}"
+                elif p["direction"] == "Short" and p["current_price"] >= p["stop_loss"]:
+                    exit_trigger = "Stop loss"
+                    exit_detail = f"Price ${p['current_price']:.2f} >= stop ${p['stop_loss']:.2f}"
+
+            # 3. Trailing stop
+            if not exit_trigger:
+                hwm = high_water_marks.get(tk, p["entry_price"])
+                trailing_pct = p["_trailing_pct"]
+                if p["direction"] == "Long":
+                    trailing_stop = hwm * (1 - trailing_pct)
+                    if p["current_price"] <= trailing_stop and hwm > p["entry_price"]:
+                        exit_trigger = "Trailing stop"
+                        exit_detail = (
+                            f"Price ${p['current_price']:.2f} fell below trailing "
+                            f"${trailing_stop:.2f} (HWM ${hwm:.2f}, -{trailing_pct*100:.1f}%)"
+                        )
+
+            # 4. Time decay
+            if not exit_trigger and hold_mins >= p["_max_hold_mins"]:
+                exit_trigger = "Time decay"
+                exit_detail = f"Held {hold_mins}m >= max {p['_max_hold_mins']}m for {p['_catalyst_type']}"
+
+            # 5. Volume divergence (simulated — random chance after long hold)
+            if not exit_trigger and steps_held > DEMO_MIN_HOLD_STEPS * 2 and random.random() < 0.08:
+                exit_trigger = "Volume divergence"
+                exit_detail = f"Price rising but volume declining for 3 consecutive checks"
+
+            if exit_trigger:
+                closed_indices.append(i)
+                exit_price = apply_slippage(p["current_price"], is_buy=False)
+                fees = compute_fees(exit_price, p["qty"])
+                total_fees_paid += fees
+
+                gross = (exit_price - p["entry_price"]) * p["qty"]
+                if p["direction"] == "Short":
+                    gross = -gross
+                net = round(gross - fees, 2)
+                gross = round(gross, 2)
+                proceeds = round(exit_price * p["qty"], 2)
+                cash += proceeds - fees
+
+                total_trades += 1
+                if net > 0:
+                    winning_trades += 1
+
+                trade = {
+                    "entry_time": p["_entry_time"],
+                    "exit_time": sim_ts(),
+                    "ticker": p["ticker"],
+                    "direction": p["direction"],
+                    "entry_price": p["entry_price"],
+                    "exit_price": exit_price,
+                    "qty": p["qty"],
+                    "pnl_gross": gross,
+                    "gross_pnl": gross,
+                    "fees": fees,
+                    "pnl_net": net,
+                    "net_pnl": net,
+                    "exit_trigger": exit_trigger,
+                    "hold_duration": p["time_held"],
+                    "hold_duration_sec": hold_mins * 60,
+                }
+                trades.append(trade)
+                st.add_trade(trade)
+
+                # Clean up tracking
+                high_water_marks.pop(tk, None)
+
+                color = "PROFIT" if net >= 0 else "LOSS"
+                st.add_log(
+                    f"EXIT {p['direction'].upper()} {p['qty']}x {p['ticker']} @ ${exit_price:.2f} "
+                    f"| Trigger: {exit_trigger}",
+                    color,
+                )
+                st.add_log(
+                    f"  P&L: gross=${gross:+.2f} fees=${fees:.4f} net=${net:+.2f} "
+                    f"({net/(p['entry_price']*p['qty'])*100:+.2f}%) | Held: {p['time_held']}",
+                    color,
+                )
+                st.add_log(f"  Reason: {exit_detail}", "INFO")
+
+                # Detailed trade log to file for optimization
+                st.log_trade_to_file({
+                    **trade,
+                    "catalyst": p["_catalyst"],
+                    "catalyst_type": p["_catalyst_type"],
+                    "signal_confidence": p["_signal_confidence"],
+                    "signal_magnitude": p["_signal_magnitude"],
+                    "rsi_at_entry": p["_rsi_at_entry"],
+                    "vol_ratio_at_entry": p["_vol_ratio_at_entry"],
+                    "stop_loss": p["stop_loss"],
+                    "target": p["target"],
+                    "max_hold_mins": p["_max_hold_mins"],
+                    "high_water_mark": high_water_marks.get(tk, p["entry_price"]),
+                    "exit_detail": exit_detail,
+                    "steps_held": steps_held,
+                    "total_trades_so_far": total_trades,
+                    "win_rate": round(winning_trades / total_trades * 100, 1) if total_trades else 0,
+                    "equity_at_exit": round(cash + sum(
+                        pp["entry_price"] * pp["qty"] + pp["unrealized_pnl"]
+                        for j, pp in enumerate(positions) if j not in closed_indices
+                    ), 2),
+                })
+
+        # Remove closed positions (reverse order to preserve indices)
+        for i in sorted(closed_indices, reverse=True):
+            positions.pop(i)
 
         st.update_positions(positions)
 
-        # -- maybe close a position --
-        if positions and random.random() < 0.25:
-            p = positions.pop(random.randint(0, len(positions) - 1))
-            fees = round(random.uniform(0.01, 0.10), 2)
-            gross = p["unrealized_pnl"]
-            net = round(gross - fees, 2)
-            cash += round(p["entry_price"] * p["qty"] + gross, 2)
-            trade = {
-                "entry_time": p["_entry_time"],
-                "exit_time": time.strftime("%H:%M:%S"),
-                "ticker": p["ticker"],
-                "direction": p["direction"],
-                "entry_price": p["entry_price"],
-                "exit_price": p["current_price"],
-                "qty": p["qty"],
-                "gross_pnl": round(gross, 2),
-                "fees": fees,
-                "net_pnl": net,
-                "exit_trigger": random.choice([
-                    "Stop loss", "Target hit", "Trailing stop", "Manual",
-                ]),
-                "hold_duration": p["time_held"],
-            }
-            trades.append(trade)
-            st.add_trade(trade)
-            st.add_log(
-                f"CLOSE {p['ticker']} | net={net:+.2f}",
-                "EXEC",
-            )
-
-            equity = cash + sum(
-                pos["entry_price"] * pos["qty"] + pos["unrealized_pnl"]
-                for pos in positions
-            )
-            st.add_equity_point(time.strftime("%H:%M:%S"), round(equity, 2))
-
-        # -- always recompute equity for the account bar --
+        # -- recompute equity --
         pos_value = sum(
             pos["entry_price"] * pos["qty"] + pos["unrealized_pnl"]
             for pos in positions
         )
         equity = round(cash + pos_value, 2)
-        total_pnl = round(equity - 1000.0, 2)
+        total_pnl = round(equity - starting_capital, 2)
+
+        st.add_equity_point(sim_ts(), round(equity, 2))
+
+        # Periodic summary log
+        if step % 10 == 0:
+            win_rate = round(winning_trades / total_trades * 100, 1) if total_trades else 0
+            st.add_log(
+                f"SUMMARY: Equity=${equity:.2f} P&L=${total_pnl:+.2f} ({total_pnl/starting_capital*100:+.1f}%) "
+                f"| Trades={total_trades} Win={win_rate}% | Fees=${total_fees_paid:.2f} "
+                f"| Open={len(positions)} Cash=${cash:.2f}",
+                "INFO",
+            )
+
         unsettled = round(
-            sum(t["entry_price"] * t["qty"] for t in trades[-2:]) * 0.1, 2
-        )
-        day_trades = max(0, 3 - len([t for t in trades[-5:]]))
+            sum(t["entry_price"] * t["qty"] for t in trades[-3:]) * 0.1, 2
+        ) if trades else 0.0
 
         st.update_account(
             current_equity=equity,
             total_pnl=total_pnl,
-            total_pnl_pct=round(total_pnl / 10.0, 2),  # pct of 1000
+            total_pnl_pct=round(total_pnl / starting_capital * 100, 2),
             available_cash=round(cash, 2),
             unsettled_funds=unsettled,
-            day_trades_remaining=day_trades,
+            day_trades_remaining=999,  # unlimited in demo
             market_open=True,
             market_status="Open",
-            next_event="Closes in 2h 14m",
+            next_event=f"Closes in {max(0, 16 - sim_time.hour)}h {60 - sim_time.minute}m",
         )
 
 
