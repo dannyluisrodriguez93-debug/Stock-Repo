@@ -1,13 +1,50 @@
-"""Demo / simulation mode configuration constants."""
+"""Configuration constants for the trading signal system.
+
+Fee structure modeled on E*Trade (Morgan Stanley) retail accounts.
+All regulatory fees match current SEC/FINRA rates. Designed to be
+swapped out for real broker API configuration when going live.
+"""
 
 from zoneinfo import ZoneInfo
+
+# ---------------------------------------------------------------------------
+# Broker profile — E*Trade (Morgan Stanley) retail account
+# ---------------------------------------------------------------------------
+BROKER_NAME: str = "E*Trade"
+
+# Commission: $0 for online US-listed stock trades
+COMMISSION_PER_TRADE: float = 0.00       # $0 commission (standard since 2019)
+
+# Options: $0.65 per contract ($0.50 for 30+ trades/quarter)
+OPTIONS_PER_CONTRACT: float = 0.65
+OPTIONS_PER_CONTRACT_ACTIVE: float = 0.50  # 30+ trades/quarter discount
+
+# ---------------------------------------------------------------------------
+# Regulatory fees (pass-through, charged on SELLS only)
+# These are charged by every broker — not broker-specific
+# ---------------------------------------------------------------------------
+# SEC Section 31 Transaction Fee: $27.80 per million of sell proceeds
+# Rate: 0.00278% = $0.0000278 per $1 of sell proceeds
+SEC_FEE_RATE: float = 0.0000278
+
+# FINRA Trading Activity Fee (TAF): $0.000166 per share sold, max $8.30
+FINRA_TAF_RATE: float = 0.000166
+FINRA_TAF_CAP: float = 8.30
+
+# FINRA Consolidated Audit Trail (CAT) fee: negligible for retail
+# ~$0.000048 per covered sell transaction — included for completeness
+FINRA_CAT_FEE: float = 0.000048
+
+# Options Regulatory Fee (ORF): $0.02905 per contract (sells)
+OPTIONS_ORF: float = 0.02905
 
 # ---------------------------------------------------------------------------
 # Capital & position sizing
 # ---------------------------------------------------------------------------
 STARTING_CAPITAL: float = 1_000.0
-MAX_POSITION_PCT: float = 0.20          # 20 % of portfolio per trade
+MAX_POSITION_PCT: float = 0.20          # 20% of portfolio per trade
 WHOLE_SHARES_ONLY: bool = True          # no fractional shares
+MAX_OPEN_POSITIONS: int = 5             # max concurrent positions
 
 # ---------------------------------------------------------------------------
 # Watchlist
@@ -26,22 +63,15 @@ PDT_MAX_DAY_TRADES: int = 3            # max day trades per rolling window
 PDT_ROLLING_WINDOW_DAYS: int = 5       # 5 business days
 
 # ---------------------------------------------------------------------------
-# Regulatory fees
+# Slippage & execution (simulated)
 # ---------------------------------------------------------------------------
-SEC_FEE_RATE: float = 0.0000278        # per dollar of sell proceeds
-FINRA_TAF_RATE: float = 0.000166       # per share sold
-FINRA_TAF_CAP: float = 8.30            # max TAF per trade
-
-# ---------------------------------------------------------------------------
-# Slippage & execution
-# ---------------------------------------------------------------------------
-SLIPPAGE_MIN_PCT: float = 0.0001       # 0.01 %
-SLIPPAGE_MAX_PCT: float = 0.0005       # 0.05 %
-EXEC_DELAY_MIN_MS: int = 50
+SLIPPAGE_MIN_PCT: float = 0.0001       # 0.01%
+SLIPPAGE_MAX_PCT: float = 0.0005       # 0.05%
+EXEC_DELAY_MIN_MS: int = 50            # order execution delay
 EXEC_DELAY_MAX_MS: int = 200
 
 # ---------------------------------------------------------------------------
-# T+1 settlement
+# T+1 settlement (equities, since May 2024)
 # ---------------------------------------------------------------------------
 SETTLEMENT_BUSINESS_DAYS: int = 1      # proceeds locked for 1 business day
 
@@ -54,8 +84,15 @@ MARKET_OPEN_MINUTE: int = 30
 MARKET_CLOSE_HOUR: int = 16
 MARKET_CLOSE_MINUTE: int = 0
 
+# Extended hours (E*Trade allows pre-market 7:00-9:30, after-hours 16:00-20:00)
+EXTENDED_HOURS_ENABLED: bool = False    # disabled by default (wider spreads)
+PRE_MARKET_OPEN_HOUR: int = 7
+PRE_MARKET_OPEN_MINUTE: int = 0
+AFTER_HOURS_CLOSE_HOUR: int = 20
+AFTER_HOURS_CLOSE_MINUTE: int = 0
+
 # ---------------------------------------------------------------------------
-# Demo polling intervals (faster than production)
+# Production polling intervals
 # ---------------------------------------------------------------------------
 SIGNAL_SCAN_INTERVAL_SEC: float = 15.0    # scan for new setups every 15 s
 VOLUME_CHECK_INTERVAL_SEC: float = 10.0   # volume confirmation every 10 s
@@ -74,7 +111,7 @@ DEMO_PRICE_DRIFT: tuple[float, float] = (-0.010, 0.010)  # symmetric, no bias
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
-LOG_RETENTION: int = 500                 # keep last 500 log entries (up from 200)
+LOG_RETENTION: int = 500                 # keep last 500 log entries
 TRADE_LOG_FILE: str = "demo_trade_log.jsonl"  # append-only JSONL for optimization
 
 # ---------------------------------------------------------------------------
@@ -95,3 +132,24 @@ CONGRESSIONAL_MAX_HOLD_SEC: int = 120 * 3600  # 5 days
 RSI_OVERSOLD: float = 30.0
 RSI_OVERBOUGHT: float = 70.0
 VOLUME_SPIKE_RATIO: float = 2.0        # current vol / 20-day avg
+
+# ---------------------------------------------------------------------------
+# Production broker API configuration (for real trading)
+# Set these in .env or environment variables when going live
+# ---------------------------------------------------------------------------
+# E*Trade API (OAuth 1.0a)
+# ETRADE_CONSUMER_KEY: str = ""         # from E*Trade developer portal
+# ETRADE_CONSUMER_SECRET: str = ""      # from E*Trade developer portal
+# ETRADE_ACCOUNT_ID: str = ""           # trading account ID
+# ETRADE_SANDBOX: bool = True           # True = paper trading, False = live
+#
+# Alpaca API (alternative broker, REST-based)
+# ALPACA_API_KEY: str = ""
+# ALPACA_SECRET_KEY: str = ""
+# ALPACA_BASE_URL: str = "https://paper-api.alpaca.markets"  # paper trading
+#
+# To switch from simulation to live:
+# 1. Set broker credentials in .env
+# 2. Run: python -m demo.run --live
+# 3. System will use real broker API for order execution
+# 4. All other layers (scanner, signals, alerts) work the same

@@ -170,14 +170,33 @@ class SimulatedAccount:
             return False, f"PDT limit reached: {len(self._day_trades)}/{PDT_MAX_DAY_TRADES} day trades used"
         return True, ""
 
-    def compute_fees(self, price: float, qty: int, is_sell: bool) -> float:
-        fees = 0.0
+    def compute_fees(self, price: float, qty: int, is_sell: bool) -> dict:
+        """Compute all fees for a trade, matching E*Trade fee structure.
+
+        Returns dict with breakdown for logging. Commission is $0 for
+        online equity trades. Regulatory fees only apply to sells.
+        """
+        from demo.config import COMMISSION_PER_TRADE, FINRA_CAT_FEE
+
+        commission = COMMISSION_PER_TRADE  # $0 for E*Trade equity trades
+        sec_fee = 0.0
+        finra_taf = 0.0
+        finra_cat = 0.0
+
         if is_sell:
             proceeds = price * qty
-            sec_fee = proceeds * SEC_FEE_RATE
-            finra_taf = min(qty * FINRA_TAF_RATE, FINRA_TAF_CAP)
-            fees = sec_fee + finra_taf
-        return round(fees, 4)
+            sec_fee = round(proceeds * SEC_FEE_RATE, 6)
+            finra_taf = round(min(qty * FINRA_TAF_RATE, FINRA_TAF_CAP), 6)
+            finra_cat = round(FINRA_CAT_FEE, 6)
+
+        total = round(commission + sec_fee + finra_taf + finra_cat, 4)
+        return {
+            "total": total,
+            "commission": commission,
+            "sec_fee": round(sec_fee, 6),
+            "finra_taf": round(finra_taf, 6),
+            "finra_cat": round(finra_cat, 6),
+        }
 
     def apply_slippage(self, price: float, is_buy: bool) -> float:
         slip_pct = random.uniform(SLIPPAGE_MIN_PCT, SLIPPAGE_MAX_PCT)
@@ -188,7 +207,8 @@ class SimulatedAccount:
     def buy(self, ticker: str, price: float, qty: int) -> dict:
         fill_price = self.apply_slippage(price, is_buy=True)
         cost = fill_price * qty
-        fees = self.compute_fees(fill_price, qty, is_sell=False)
+        fee_breakdown = self.compute_fees(fill_price, qty, is_sell=False)
+        fees = fee_breakdown["total"]
         total = cost + fees
 
         self.cash -= total
@@ -203,6 +223,7 @@ class SimulatedAccount:
             "fill_price": fill_price,
             "slippage": round(fill_price - price, 4),
             "fees": fees,
+            "fee_breakdown": fee_breakdown,
             "total_cost": round(total, 2),
         }
 
@@ -214,7 +235,8 @@ class SimulatedAccount:
         qty = pos["qty"]
         fill_price = self.apply_slippage(price, is_buy=False)
         proceeds = fill_price * qty
-        fees = self.compute_fees(fill_price, qty, is_sell=True)
+        fee_breakdown = self.compute_fees(fill_price, qty, is_sell=True)
+        fees = fee_breakdown["total"]
         net_proceeds = proceeds - fees
 
         # Check if this is a day trade
@@ -243,6 +265,7 @@ class SimulatedAccount:
             "exit_time": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
             "exit_slippage": round(price - fill_price, 4),
             "fees": fees,
+            "fee_breakdown": fee_breakdown,
             "pnl_gross": round(pnl_gross, 2),
             "pnl_net": round(pnl_net, 2),
             "pnl_pct": round(pnl_pct, 2),
@@ -613,9 +636,16 @@ class DemoExecutor:
             color,
         )
         hold_mins = result["hold_duration_sec"] / 60
+        fb = result.get("fee_breakdown", {})
         self.state.add_log(
             f"  Hold: {hold_mins:.1f}min | Entry=${result['entry_price']:.2f} "
             f"Exit=${result['exit_price']:.2f} | Slippage=${result.get('exit_slippage', 0):.4f}",
+            "INFO",
+        )
+        self.state.add_log(
+            f"  Fees (E*Trade): commission=${fb.get('commission', 0):.2f} "
+            f"SEC=${fb.get('sec_fee', 0):.6f} TAF=${fb.get('finra_taf', 0):.6f} "
+            f"CAT=${fb.get('finra_cat', 0):.6f} total=${result['fees']:.4f}",
             "INFO",
         )
 

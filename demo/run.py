@@ -40,28 +40,42 @@ async def run_simulation(state):
 
 def main():
     from demo.dashboard_state import DashboardState
+    from demo.config import (
+        STARTING_CAPITAL, BROKER_NAME, COMMISSION_PER_TRADE,
+        SEC_FEE_RATE, FINRA_TAF_RATE, FINRA_CAT_FEE,
+    )
 
     demo_only = "--demo" in sys.argv
 
-    print("=" * 60)
-    print("  TRADING SIGNAL SYSTEM - DEMO MODE")
-    print("=" * 60)
+    print("=" * 62)
+    print("  TRADING SIGNAL SYSTEM")
+    print("=" * 62)
     print()
-    print("  Starting capital: $1,000.00")
+    print(f"  Starting capital:  ${STARTING_CAPITAL:,.2f}")
     if demo_only:
-        print("  Mode: Synthetic data demo (no APIs required)")
+        print("  Mode:              Synthetic data (no APIs required)")
     else:
-        print("  Mode: Simulation (real market data, simulated execution)")
-    print("  Dashboard: http://localhost:5050")
+        print("  Mode:              Live data sim (real prices, paper trades)")
+    print("  Dashboard:         http://localhost:5050")
     print()
-    print("  Constraints enforced:")
-    print("    - Pattern Day Trader rule (3 day trades / 5 days)")
+    print(f"  Broker model:      {BROKER_NAME}")
+    print(f"  Commission:        ${COMMISSION_PER_TRADE:.2f} per trade")
+    print(f"  SEC fee:           ${SEC_FEE_RATE * 1_000_000:.2f} per $1M sold")
+    print(f"  FINRA TAF:         ${FINRA_TAF_RATE:.6f} per share sold")
+    print(f"  FINRA CAT:         ${FINRA_CAT_FEE:.6f} per transaction")
+    print()
+    print("  Signal sources:")
+    print("    - Technical analysis (RSI, VWAP, SMA, volume)")
+    print("    - SEC Form 4 insider trading filings")
+    print("    - STOCK Act congressional disclosures")
+    print()
+    print("  Constraints:")
+    print("    - PDT rule (3 day trades / 5 days under $25K)")
     print("    - T+1 settlement")
-    print("    - SEC/FINRA fees")
     print("    - Market hours (9:30 AM - 4:00 PM ET)")
     print("    - Realistic slippage & execution delay")
     print()
-    print("=" * 60)
+    print("=" * 62)
     print()
 
     # Shared state between simulator and dashboard
