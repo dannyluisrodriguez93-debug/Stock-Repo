@@ -105,6 +105,52 @@ CATALYST_TEMPLATES: dict[str, list[str]] = {
         "Short interest in {ticker} drops sharply — potential short-covering rally",
         "{ticker} reclaims VWAP with strong bid-side tape; buyers in control",
     ],
+
+    # ------------------------------------------------------------------
+    # Insider trading (SEC Form 4 filings — C-suite, directors, 10%+ owners)
+    # ------------------------------------------------------------------
+    "insider_buy": [
+        "SEC Form 4: {ticker} CEO purchases {shares} shares at ${price:.2f} — largest insider buy in 12 months",
+        "{ticker} CFO acquires {shares} shares in open-market purchase worth ${value}",
+        "Cluster insider buying at {ticker}: {count} insiders purchased shares this week",
+        "{ticker} director buys {shares} shares; 4th consecutive insider purchase this quarter",
+        "10% owner increases {ticker} stake by {shares} shares — Form 4 filed today",
+        "{ticker} COO exercises options and holds — bullish signal per insider analytics",
+        "Multiple {ticker} executives buying ahead of earnings: {count} Form 4 filings in 10 days",
+        "SVP of {ticker} makes first open-market purchase in 3 years — {shares} shares at ${price:.2f}",
+        "{ticker} board member accumulates {shares} additional shares; total insider buys up 340% YoY",
+        "Insider sentiment shift: {ticker} buy/sell ratio hits 8:1 this month per SEC filings",
+    ],
+    "insider_sell": [
+        "SEC Form 4: {ticker} CEO sells {shares} shares at ${price:.2f} — largest insider sale in 6 months",
+        "{ticker} CFO disposes {shares} shares via 10b5-1 plan — routine or signal?",
+        "Cluster insider selling at {ticker}: {count} insiders sold shares this week",
+        "{ticker} CTO sells {shares} shares; 3rd executive to sell this month",
+        "{ticker} insider sales spike: {count} Form 4 dispositions totaling ${value}",
+        "Multiple {ticker} directors reducing positions ahead of lockup expiry",
+    ],
+
+    # ------------------------------------------------------------------
+    # Congressional / political trading (STOCK Act disclosures)
+    # ------------------------------------------------------------------
+    "congressional_buy": [
+        "STOCK Act: Rep. Pelosi discloses purchase of {ticker} call options worth ${value}",
+        "Sen. {senator} reports new {ticker} position — {shares} shares purchased",
+        "Congressional disclosure: {committee} member buys {ticker} ahead of sector hearing",
+        "Pelosi trade alert: {ticker} calls acquired — history shows 70%+ hit rate on her picks",
+        "Multiple members of {committee} Committee purchased {ticker} within same week",
+        "Sen. {senator} adds to {ticker} position; 3rd congressional buy this month",
+        "STOCK Act filing: Rep. {representative} buys ${value} of {ticker} — committee has oversight",
+        "Congressional buying cluster: {count} members disclosed {ticker} purchases in 14 days",
+        "Bipartisan {ticker} buying: both sides of aisle adding positions per STOCK Act filings",
+        "Sen. {senator} discloses {ticker} purchase days before favorable committee vote",
+    ],
+    "congressional_sell": [
+        "STOCK Act: Sen. {senator} sells entire {ticker} position — {shares} shares",
+        "Congressional exit: {count} members sold {ticker} this week per disclosure filings",
+        "Rep. {representative} liquidates {ticker} holdings worth ${value}",
+        "Multiple {committee} Committee members reducing {ticker} exposure",
+    ],
 }
 
 
@@ -127,3 +173,42 @@ TICKER_SECTOR: dict[str, str] = {
     "TSLA": "regulatory",
     "SPY": "macro",
 }
+
+
+# ---------------------------------------------------------------------------
+# Insider / congressional signal enrichment data
+# ---------------------------------------------------------------------------
+
+# Real senators/reps known for active trading (public info from STOCK Act)
+SENATORS: list[str] = [
+    "Tuberville", "Hagerty", "Hickenlooper", "Ossoff", "Kelly",
+    "Lujan", "Cassidy", "Sullivan", "Hoeven", "Capito",
+    "Coons", "King", "Lummis", "Rosen", "Blackburn",
+]
+
+REPRESENTATIVES: list[str] = [
+    "Pelosi", "Crenshaw", "Gottheimer", "Fallon", "Green",
+    "Gimenez", "Mace", "Meuser", "Mooney", "Curtis",
+    "Garcia", "Kim", "Connolly", "Malinowski", "Khanna",
+]
+
+# Committees with sector oversight (maps to which tickers they'd trade)
+COMMITTEES: dict[str, list[str]] = {
+    "Armed Services": ["BA", "LMT", "RTX", "GD", "NOC"],
+    "Commerce & Technology": ["AAPL", "MSFT", "GOOGL", "META", "AMZN", "NVDA", "AMD"],
+    "Energy & Commerce": ["TSLA", "AMZN"],
+    "Financial Services": ["SPY"],
+    "Intelligence": ["NVDA", "MSFT", "GOOGL", "META"],
+    "Science & Technology": ["NVDA", "AMD", "MSFT", "GOOGL"],
+}
+
+# Insider titles for Form 4 filings
+INSIDER_TITLES: list[str] = [
+    "CEO", "CFO", "COO", "CTO", "President", "SVP of Engineering",
+    "EVP & General Counsel", "Director", "Board Member",
+    "10% Owner", "VP of Product", "Chief Strategy Officer",
+]
+
+# Confidence boost when insider/congressional signal aligns with technical
+INSIDER_CONFIDENCE_BOOST: float = 0.15
+CONGRESSIONAL_CONFIDENCE_BOOST: float = 0.20  # historically higher signal value

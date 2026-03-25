@@ -471,6 +471,12 @@ class DemoExecutor:
             "supply_chain": 48 * 3600,
             "macro": 24 * 3600,
             "technical": 8 * 3600,
+            "insider_buy": 96 * 3600,       # 4 days — insiders are informed
+            "insider_sell": 72 * 3600,      # 3 days
+            "congressional_buy": 120 * 3600, # 5 days — congress has oversight
+            "congressional_sell": 96 * 3600, # 4 days
+            "confirmed_insider_buy": 144 * 3600,       # 6 days — double signal
+            "confirmed_congressional_buy": 168 * 3600,  # 7 days — strongest signal
         }
         max_hold_sec = time_limits.get(catalyst, 24 * 3600)
 
@@ -679,12 +685,18 @@ class DemoOrchestrator:
         self.executor = DemoExecutor(self.account, state)
         self._running = False
 
+        # Insider / congressional signal source
+        from demo.insider_signals import InsiderSignalSource, boost_signal_with_insider
+        self.insider_scanner = InsiderSignalSource()
+        self._boost_signal = boost_signal_with_insider
+
     async def run(self) -> None:
         self._running = True
-        self.state.add_log("Demo simulation started", "INFO")
+        self.state.add_log("Simulation started", "INFO")
         self.state.add_log(f"Starting capital: ${STARTING_CAPITAL:,.2f}", "INFO")
         self.state.add_log(f"Watchlist: {', '.join(WATCHLIST)}", "INFO")
-        self.state.add_log("Scanning for real technical setups...", "INFO")
+        self.state.add_log("Signal sources: Technical analysis + Insider trading (Form 4) + Congressional (STOCK Act)", "INFO")
+        self.state.add_log("Scanning for real technical setups + insider/congressional activity...", "INFO")
 
         # Record initial equity
         self.account.record_equity()
@@ -708,9 +720,52 @@ class DemoOrchestrator:
 
                 self.state.add_log(f"--- Scan cycle #{cycle} ---", "INFO")
 
-                # Scan for signals (uses real market data)
+                # Scan for technical signals (uses real market data)
                 signals = await self.scanner.scan_all()
-                self.state.add_log(f"Scanned {len(WATCHLIST)} tickers, found {len(signals)} setups", "INFO")
+                self.state.add_log(f"Scanned {len(WATCHLIST)} tickers, found {len(signals)} technical setups", "INFO")
+
+                # Scan for insider / congressional signals
+                insider_signals = self.insider_scanner.scan_all()
+                if insider_signals:
+                    self.state.add_log(f"Found {len(insider_signals)} insider/congressional signal(s)", "INFO")
+                    for isig in insider_signals:
+                        src = "INSIDER" if isig.get("source") == "SEC_Form4" else "CONGRESS"
+                        self.state.add_signal({
+                            "tickers": isig["ticker"],
+                            "direction": isig["direction"],
+                            "catalyst": isig["headline"],
+                            "catalyst_type": isig["catalyst_type"],
+                            "magnitude": isig["magnitude"],
+                            "confidence": isig["confidence"],
+                            "flag_level": isig["flag_level"],
+                            "rsi": isig.get("rsi", 50),
+                            "volume_ratio": isig.get("volume_ratio", 1.0),
+                            "price": isig["price"],
+                        })
+                        self.state.add_log(
+                            f"{src} SIGNAL: {isig['ticker']} {isig['direction']} | "
+                            f"{isig['flag_level']} | conf={isig['confidence']} | "
+                            f"{isig['headline'][:80]}",
+                            "RED" if isig["flag_level"] == "RED" else "YELLOW",
+                        )
+
+                        # Check if insider signal confirms any technical signal
+                        for sig in signals:
+                            if sig["ticker"] == isig["ticker"] and sig["direction"] == isig["direction"]:
+                                boosted = self._boost_signal(sig, isig)
+                                self.state.add_log(
+                                    f"  CONFIRMED: {src} + Technical on {sig['ticker']} — "
+                                    f"conf {sig['confidence']} -> {boosted['confidence']}",
+                                    "RED",
+                                )
+                                # Replace with boosted version
+                                signals[signals.index(sig)] = boosted
+                                break
+
+                        # Standalone insider RED signals also auto-execute
+                        if isig["flag_level"] == "RED":
+                            self.state.add_log(f"Auto-executing {src} RED signal for {isig['ticker']}", "EXEC")
+                            await self.executor.execute_entry(isig)
 
                 for signal in signals:
                     # Add to dashboard signal feed
@@ -722,8 +777,8 @@ class DemoOrchestrator:
                         "magnitude": signal["magnitude"],
                         "confidence": signal["confidence"],
                         "flag_level": signal["flag_level"],
-                        "rsi": signal["rsi"],
-                        "volume_ratio": signal["volume_ratio"],
+                        "rsi": signal.get("rsi", 50),
+                        "volume_ratio": signal.get("volume_ratio", 1.0),
                         "price": signal["price"],
                     })
 
@@ -734,14 +789,13 @@ class DemoOrchestrator:
                             "RED",
                         )
                         self.state.add_log(
-                            f"  RSI={signal['rsi']} vol={signal['volume_ratio']}x "
+                            f"  RSI={signal.get('rsi', 'N/A')} vol={signal.get('volume_ratio', 'N/A')}x "
                             f"mag={signal['magnitude']} conf={signal['confidence']} "
-                            f"price=${signal['price']:.2f} support=${signal['support']:.2f} "
-                            f"resist=${signal['resistance']:.2f}",
+                            f"price=${signal['price']:.2f} support=${signal.get('support', 0):.2f} "
+                            f"resist=${signal.get('resistance', 0):.2f}",
                             "INFO",
                         )
 
-                        # Auto-approve RED signals
                         self.state.add_log(f"Auto-executing {signal['ticker']} (RED flag)", "INFO")
                         await self.executor.execute_entry(signal)
 
@@ -749,7 +803,7 @@ class DemoOrchestrator:
                         self.state.add_log(
                             f"YELLOW FLAG: {signal['ticker']} {signal['direction']} - "
                             f"watching (mag={signal['magnitude']}, conf={signal['confidence']}, "
-                            f"RSI={signal['rsi']}, vol={signal['volume_ratio']}x)",
+                            f"RSI={signal.get('rsi', 'N/A')}, vol={signal.get('volume_ratio', 'N/A')}x)",
                             "YELLOW",
                         )
 

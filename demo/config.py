@@ -75,6 +75,18 @@ LOG_RETENTION: int = 500                 # keep last 500 log entries (up from 20
 TRADE_LOG_FILE: str = "demo_trade_log.jsonl"  # append-only JSONL for optimization
 
 # ---------------------------------------------------------------------------
+# Insider / Congressional signal parameters
+# ---------------------------------------------------------------------------
+INSIDER_SCAN_ENABLED: bool = True        # enable insider signal source
+INSIDER_COOLDOWN_MIN: int = 30           # min minutes between signals for same ticker
+INSIDER_BUY_PROBABILITY: float = 0.70    # 70% of insider signals are buys
+CONGRESSIONAL_BUY_PROBABILITY: float = 0.65
+
+# Max hold times for insider-driven positions (longer — these are informed)
+INSIDER_MAX_HOLD_SEC: int = 96 * 3600    # 4 days
+CONGRESSIONAL_MAX_HOLD_SEC: int = 120 * 3600  # 5 days
+
+# ---------------------------------------------------------------------------
 # Technical thresholds used by SignalSimulator
 # ---------------------------------------------------------------------------
 RSI_OVERSOLD: float = 30.0

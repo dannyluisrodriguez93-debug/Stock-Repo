@@ -700,7 +700,13 @@ def _run_demo_data_pump(st: DashboardState) -> None:
         SLIPPAGE_MAX_PCT,
         MAX_POSITION_PCT,
     )
-    from demo.demo_signals import CATALYST_TEMPLATES, TICKER_SECTOR
+    from demo.demo_signals import (
+        CATALYST_TEMPLATES, TICKER_SECTOR,
+        INSIDER_CONFIDENCE_BOOST, CONGRESSIONAL_CONFIDENCE_BOOST,
+    )
+    from demo.insider_signals import InsiderSignalSource, boost_signal_with_insider
+
+    insider_source = InsiderSignalSource()
 
     tickers = ["NVDA", "TSLA", "AAPL", "AMD", "META", "SPY", "BA", "MSFT",
                "GOOGL", "AMZN", "LMT", "RTX", "GD", "NOC"]
@@ -791,8 +797,77 @@ def _run_demo_data_pump(st: DashboardState) -> None:
         )
         st.add_log(f"  Catalyst: {headline[:100]}", "SCAN")
 
-        # -- maybe open a position (RED flags auto-execute, 30% of YELLOWs) --
+        # -- scan for insider / congressional signals --
+        insider_signals = insider_source.scan_all(sim_time=sim_time, tickers=tickers)
+        for isig in insider_signals:
+            src_label = "INSIDER" if isig["source"] == "SEC_Form4" else "CONGRESS"
+            st.add_signal({
+                "ticker": isig["ticker"],
+                "catalyst": isig["headline"],
+                "catalyst_type": isig["catalyst_type"],
+                "direction": isig["direction"].replace("bullish", "Long").replace("bearish", "Short"),
+                "magnitude": str(isig["magnitude"]),
+                "confidence": str(int(isig["confidence"] * 100)) + "%",
+                "flag_level": isig["flag_level"],
+                "timestamp": sim_ts(),
+            })
+            st.add_log(
+                f"{src_label} SIGNAL: {isig['ticker']} {isig['direction']} | "
+                f"{isig['flag_level']} flag | conf={int(isig['confidence']*100)}% "
+                f"mag={isig['magnitude']}",
+                "RED" if isig["flag_level"] == "RED" else "YELLOW",
+            )
+            st.add_log(f"  {isig['headline'][:120]}", "INFO")
+
+            # Log extra insider detail
+            if isig["source"] == "SEC_Form4":
+                st.add_log(
+                    f"  Form 4: {isig.get('insider_title', 'N/A')} | "
+                    f"{isig.get('insider_shares', 0):,} shares | "
+                    f"${isig.get('insider_value', 'N/A')} | "
+                    f"{isig.get('insider_count', 1)} insider(s) | "
+                    f"Filed: {isig.get('filing_date', 'N/A')} ({isig.get('filing_days_ago', '?')}d ago)",
+                    "INFO",
+                )
+            elif isig["source"] == "STOCK_Act":
+                st.add_log(
+                    f"  STOCK Act: {isig.get('congress_type', '').title()} {isig.get('congress_member', 'N/A')} | "
+                    f"Committee: {isig.get('committee', 'N/A')} | "
+                    f"Oversight: {'YES' if isig.get('has_oversight') else 'NO'} | "
+                    f"{isig.get('congress_shares', 0):,} shares (${isig.get('congress_value', 'N/A')})",
+                    "INFO",
+                )
+
+            # If insider signal matches the technical signal ticker, boost it
+            if isig["ticker"] == ticker and isig["direction"].replace("bullish", "Long").replace("bearish", "Short") == direction:
+                old_conf = conf
+                conf = min(0.95, conf + (CONGRESSIONAL_CONFIDENCE_BOOST if isig["source"] == "STOCK_Act" else INSIDER_CONFIDENCE_BOOST))
+                mag = min(5.0, mag + 1.0)
+                flag = "Red" if mag >= 3.0 and conf >= 0.6 else flag
+                st.add_log(
+                    f"  CONFIRMATION: {src_label} aligns with technical on {ticker} — "
+                    f"conf boosted {int(old_conf*100)}% -> {int(conf*100)}%, flag={flag.upper()}",
+                    "RED",
+                )
+
+        # -- maybe open a position (RED flags auto-execute, 15% of YELLOWs, insider signals boost) --
         should_enter = (flag == "Red") or (flag == "Yellow" and random.random() < 0.15)
+        # Also enter on any RED insider/congressional signal for a ticker we don't hold
+        for isig in insider_signals:
+            if isig["flag_level"] == "RED" and not any(p["ticker"] == isig["ticker"] for p in positions):
+                ticker = isig["ticker"]
+                direction = isig["direction"].replace("bullish", "Long").replace("bearish", "Short")
+                conf = isig["confidence"]
+                mag = float(isig["magnitude"])
+                flag = "Red"
+                rsi = isig.get("rsi", 50.0)
+                vol_ratio = isig.get("volume_ratio", 1.5)
+                sector = isig["catalyst_type"]
+                headline = isig["headline"]
+                should_enter = True
+                st.add_log(f"  Auto-executing {src_label} RED signal for {ticker}", "EXEC")
+                break
+
         already_holding = any(p["ticker"] == ticker for p in positions)
 
         if should_enter and not already_holding and len(positions) < 5:
@@ -817,6 +892,9 @@ def _run_demo_data_pump(st: DashboardState) -> None:
                 time_limits = {
                     "geopolitical": 60, "earnings": 180, "contract_win": 240,
                     "regulatory": 360, "supply_chain": 180, "macro": 120, "technical": 90,
+                    "insider_buy": 240, "insider_sell": 180,
+                    "congressional_buy": 300, "congressional_sell": 240,
+                    "confirmed_insider_buy": 360, "confirmed_congressional_buy": 420,
                 }
                 max_hold_mins = time_limits.get(sector, 120)
 
