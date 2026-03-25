@@ -772,11 +772,9 @@ def _run_demo_data_pump(st: DashboardState) -> None:
 
         st.add_log(f"--- Scan cycle #{step} | {sim_ts()} ---", "INFO")
 
-        # -- emit a signal --
+        # -- maybe emit a signal (40% chance per cycle — not every cycle) --
         ticker = random.choice(tickers)
         sector = TICKER_SECTOR.get(ticker, "technical")
-        templates = CATALYST_TEMPLATES.get(sector, CATALYST_TEMPLATES["technical"])
-        headline = random.choice(templates).format(ticker=ticker)
         direction = random.choice(["Long", "Short"])
         mag = round(random.uniform(0.5, 5.0), 1)
         conf = round(random.uniform(0.4, 0.95), 2)
@@ -784,22 +782,31 @@ def _run_demo_data_pump(st: DashboardState) -> None:
         rsi = round(random.uniform(25, 75), 1)
         vol_ratio = round(random.uniform(0.8, 3.5), 2)
 
-        st.add_signal({
-            "ticker": ticker,
-            "catalyst": headline,
-            "catalyst_type": sector,
-            "direction": direction,
-            "magnitude": str(mag) + "%",
-            "confidence": str(int(conf * 100)) + "%",
-            "flag_level": flag,
-            "timestamp": sim_ts(),
-        })
-        st.add_log(
-            f"Signal: {ticker} {direction} | {flag.upper()} flag | mag={mag} conf={int(conf*100)}% "
-            f"| RSI={rsi} vol_ratio={vol_ratio}x | sector={sector}",
-            "SCAN",
-        )
-        st.add_log(f"  Catalyst: {headline[:100]}", "SCAN")
+        has_signal = random.random() < 0.40  # only 40% of scans find a setup
+
+        if has_signal:
+            templates = CATALYST_TEMPLATES.get(sector, CATALYST_TEMPLATES["technical"])
+            headline = random.choice(templates).format(ticker=ticker)
+
+            st.add_signal({
+                "ticker": ticker,
+                "catalyst": headline,
+                "catalyst_type": sector,
+                "direction": direction,
+                "magnitude": str(mag) + "%",
+                "confidence": str(int(conf * 100)) + "%",
+                "flag_level": flag,
+                "timestamp": sim_ts(),
+            })
+            st.add_log(
+                f"Signal: {ticker} {direction} | {flag.upper()} flag | mag={mag} conf={int(conf*100)}% "
+                f"| RSI={rsi} vol_ratio={vol_ratio}x | sector={sector}",
+                "SCAN",
+            )
+            st.add_log(f"  Catalyst: {headline[:100]}", "SCAN")
+        else:
+            headline = ""
+            st.add_log(f"No actionable setup found this cycle", "INFO")
 
         # -- scan for insider / congressional signals --
         insider_signals = insider_source.scan_all(sim_time=sim_time, tickers=tickers)
@@ -854,8 +861,15 @@ def _run_demo_data_pump(st: DashboardState) -> None:
                     "RED",
                 )
 
-        # -- maybe open a position (RED flags auto-execute, 15% of YELLOWs, insider signals boost) --
-        should_enter = (flag == "Red") or (flag == "Yellow" and random.random() < 0.15)
+        # -- maybe open a position (only if we had a signal this cycle) --
+        # RED flags: 60% chance to execute (not 100% — requires confirmation)
+        # YELLOW flags: 10% chance (watching, occasionally act)
+        should_enter = False
+        if has_signal:
+            if flag == "Red":
+                should_enter = random.random() < 0.60
+            elif flag == "Yellow":
+                should_enter = random.random() < 0.10
         # Also enter on any RED insider/congressional signal for a ticker we don't hold
         for isig in insider_signals:
             if isig["flag_level"] == "RED" and not any(p["ticker"] == isig["ticker"] for p in positions):
@@ -877,77 +891,90 @@ def _run_demo_data_pump(st: DashboardState) -> None:
         if should_enter and not already_holding and len(positions) < DEMO_MAX_POSITIONS:
             price = base_prices.get(ticker, 100.0) * random.uniform(0.97, 1.03)
             max_spend = min(cash, equity * MAX_POSITION_PCT)
-            qty = max(1, int(max_spend / price)) if price > 0 else 0
-            fill_price = apply_slippage(price, is_buy=True)
-            cost = round(fill_price * qty, 2)
 
-            if cost < cash and qty > 0:
-                cash -= cost
-
-                # Set realistic stop/target based on direction and catalyst
-                if direction == "Long":
-                    stop_loss = round(fill_price * random.uniform(0.965, 0.98), 2)
-                    target = round(fill_price * random.uniform(1.03, 1.08), 2)
-                else:
-                    stop_loss = round(fill_price * random.uniform(1.02, 1.035), 2)
-                    target = round(fill_price * random.uniform(0.92, 0.97), 2)
-
-                # Time decay limit based on catalyst type
-                time_limits = {
-                    "geopolitical": 60, "earnings": 180, "contract_win": 240,
-                    "regulatory": 360, "supply_chain": 180, "macro": 120, "technical": 90,
-                    "insider_buy": 240, "insider_sell": 180,
-                    "congressional_buy": 300, "congressional_sell": 240,
-                    "confirmed_insider_buy": 360, "confirmed_congressional_buy": 420,
-                }
-                max_hold_mins = time_limits.get(sector, 120)
-
-                pos = {
-                    "ticker": ticker,
-                    "direction": direction,
-                    "qty": qty,
-                    "entry_price": fill_price,
-                    "current_price": fill_price,
-                    "unrealized_pnl": 0.0,
-                    "unrealized_pnl_pct": 0.0,
-                    "stop_loss": stop_loss,
-                    "target": target,
-                    "time_held": "0m",
-                    "_entry_time": sim_ts(),
-                    "_entry_sim_time": sim_time,
-                    "_step_opened": step,
-                    "_catalyst": headline,
-                    "_catalyst_type": sector,
-                    "_signal_confidence": conf,
-                    "_signal_magnitude": mag,
-                    "_rsi_at_entry": rsi,
-                    "_vol_ratio_at_entry": vol_ratio,
-                    "_max_hold_mins": max_hold_mins,
-                    "_trailing_pct": 0.015,
-                }
-                positions.append(pos)
-                high_water_marks[ticker] = fill_price
-
-                slippage = round(fill_price - price, 4)
+            # Only buy if we can actually afford at least 1 share within limits
+            if price > max_spend:
                 st.add_log(
-                    f"ENTRY {direction.upper()} {qty}x {ticker} @ ${fill_price:.2f} "
-                    f"(slippage: ${slippage:.4f}, cost: ${cost:.2f})",
-                    "EXEC",
+                    f"Skip {ticker}: ${price:.2f}/share exceeds max position "
+                    f"${max_spend:.2f} ({MAX_POSITION_PCT*100:.0f}% of ${equity:.2f})",
+                    "WARN",
                 )
-                st.add_log(
-                    f"  Position sizing: ${cost:.2f} / ${equity:.2f} equity = "
-                    f"{cost/equity*100:.1f}% | Cash remaining: ${cash:.2f}",
-                    "INFO",
-                )
-                st.add_log(
-                    f"  Exit plan: stop=${stop_loss:.2f} target=${target:.2f} "
-                    f"trailing=1.5% max_hold={max_hold_mins}min ({sector})",
-                    "INFO",
-                )
-            elif qty <= 0:
-                st.add_log(f"Skip {ticker}: cannot afford at ${price:.2f} (cash=${cash:.2f})", "WARN")
+            elif max_spend < 10:
+                st.add_log(f"Skip {ticker}: insufficient capital (max_spend=${max_spend:.2f})", "WARN")
             else:
-                st.add_log(f"Skip {ticker}: cost ${cost:.2f} > cash ${cash:.2f}", "WARN")
+                qty = int(max_spend / price)  # whole shares only, never exceed limit
+                if qty <= 0:
+                    st.add_log(f"Skip {ticker}: can't afford any shares at ${price:.2f}", "WARN")
+                else:
+                    fill_price = apply_slippage(price, is_buy=True)
+                    cost = round(fill_price * qty, 2)
+
+                    # Double-check cost doesn't exceed limit after slippage
+                    if cost > cash:
+                        st.add_log(f"Skip {ticker}: cost ${cost:.2f} > cash ${cash:.2f} after slippage", "WARN")
+                    else:
+                        cash -= cost
+
+                        # Set realistic stop/target based on direction and catalyst
+                        if direction == "Long":
+                            stop_loss = round(fill_price * random.uniform(0.965, 0.98), 2)
+                            target = round(fill_price * random.uniform(1.03, 1.08), 2)
+                        else:
+                            stop_loss = round(fill_price * random.uniform(1.02, 1.035), 2)
+                            target = round(fill_price * random.uniform(0.92, 0.97), 2)
+
+                        # Time decay limit based on catalyst type
+                        time_limits = {
+                            "geopolitical": 60, "earnings": 180, "contract_win": 240,
+                            "regulatory": 360, "supply_chain": 180, "macro": 120, "technical": 90,
+                            "insider_buy": 240, "insider_sell": 180,
+                            "congressional_buy": 300, "congressional_sell": 240,
+                            "confirmed_insider_buy": 360, "confirmed_congressional_buy": 420,
+                        }
+                        max_hold_mins = time_limits.get(sector, 120)
+
+                        pos = {
+                            "ticker": ticker,
+                            "direction": direction,
+                            "qty": qty,
+                            "entry_price": fill_price,
+                            "current_price": fill_price,
+                            "unrealized_pnl": 0.0,
+                            "unrealized_pnl_pct": 0.0,
+                            "stop_loss": stop_loss,
+                            "target": target,
+                            "time_held": "0m",
+                            "_entry_time": sim_ts(),
+                            "_entry_sim_time": sim_time,
+                            "_step_opened": step,
+                            "_catalyst": headline,
+                            "_catalyst_type": sector,
+                            "_signal_confidence": conf,
+                            "_signal_magnitude": mag,
+                            "_rsi_at_entry": rsi,
+                            "_vol_ratio_at_entry": vol_ratio,
+                            "_max_hold_mins": max_hold_mins,
+                            "_trailing_pct": 0.015,
+                        }
+                        positions.append(pos)
+                        high_water_marks[ticker] = fill_price
+
+                        pct_of_equity = cost / equity * 100
+                        slippage = round(fill_price - price, 4)
+                        st.add_log(
+                            f"ENTRY {direction.upper()} {qty}x {ticker} @ ${fill_price:.2f} "
+                            f"(cost: ${cost:.2f} = {pct_of_equity:.1f}% of equity)",
+                            "EXEC",
+                        )
+                        st.add_log(
+                            f"  Slippage: ${slippage:.4f} | Cash remaining: ${cash:.2f}",
+                            "INFO",
+                        )
+                        st.add_log(
+                            f"  Exit plan: stop=${stop_loss:.2f} target=${target:.2f} "
+                            f"trailing=1.5% max_hold={max_hold_mins}min ({sector})",
+                            "INFO",
+                        )
         elif already_holding:
             st.add_log(f"Skip {ticker}: already holding position", "WARN")
 
